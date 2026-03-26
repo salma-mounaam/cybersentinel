@@ -1,0 +1,291 @@
+networks:
+  main-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+  mgmt-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.21.0.0/16
+
+  sandbox-net:
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.22.0.0/16
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: cybersentinel-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - main-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: cybersentinel-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - ./data/redis:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - main-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  fastapi:
+    build: ./services/fastapi
+    container_name: cybersentinel-fastapi
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_HOST: ${REDIS_HOST}
+      REDIS_PORT: ${REDIS_PORT}
+    ports:
+      - "${FASTAPI_PORT}:8000"
+    volumes:
+      - ./services/fastapi:/app
+      - ./data/uploads:/app/uploads
+      - ./data/logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - main-net
+      - mgmt-net
+
+  ml-engine:
+    build: ./services/ml-engine
+    container_name: cybersentinel-ml-engine
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      REDIS_HOST: ${REDIS_HOST}
+      REDIS_PORT: ${REDIS_PORT}
+    ports:
+      - "${ML_PORT}:8000"
+    volumes:
+      - ./services/ml-engine:/app
+      - ./data/logs:/app/logs
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - main-net
+
+  sast-engine:
+    build: ./services/sast-engine
+    container_name: cybersentinel-sast-engine
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      MITRE_SERVICE_URL: http://mitre-service:8005
+      CORRELATION_ENGINE_URL: http://correlation-engine:8006
+    ports:
+      - "${SAST_PORT}:8004"
+    volumes:
+      - ./services/sast-engine:/app
+      - ./data/uploads:/app/uploads
+      - ./data/logs:/app/logs
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mitre-service:
+        condition: service_started
+      correlation-engine:
+        condition: service_started
+    networks:
+      - main-net
+
+  mitre-service:
+    build: ./services/mitre-service
+    container_name: cybersentinel-mitre-service
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "${MITRE_PORT}:8005"
+    volumes:
+      - ./services/mitre-service:/app
+      - ./data/mitre:/app/data
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - main-net
+
+  correlation-engine:
+    build: ./services/correlation-engine
+    container_name: cybersentinel-correlation-engine
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_HOST: ${REDIS_HOST}
+      REDIS_PORT: ${REDIS_PORT}
+    ports:
+      - "${CORRELATION_PORT}:8006"
+    volumes:
+      - ./services/correlation-engine:/app
+      - ./data/logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - main-net
+
+  frontend:
+    build: ./services/frontend
+    container_name: cybersentinel-frontend
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT}:3000"
+    volumes:
+      - ./services/frontend:/app
+      - /app/node_modules
+    depends_on:
+      - fastapi
+    networks:
+      - main-net
+
+  suricata:
+    build: ./services/suricata
+    container_name: cybersentinel-suricata
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+      - SYS_NICE
+    command: >
+      suricata -c /etc/suricata/suricata.yaml -i eth0
+    volumes:
+      - ./services/suricata/suricata.yaml:/etc/suricata/suricata.yaml
+      - ./services/suricata/rules:/var/lib/suricata/rules
+      - ./services/suricata/logs:/var/log/suricata
+    networks:
+      - main-net
+
+  signature-adapter:
+    build: ./services/signature-adapter
+    container_name: cybersentinel-signature-adapter
+    restart: unless-stopped
+    ports:
+      - "8007:8000"
+    depends_on:
+      - mitre-service
+      - correlation-engine
+    networks:
+      - main-net
+
+  fusion-engine:
+    build: ./services/fusion-engine
+    container_name: cybersentinel-fusion-engine
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_HOST: ${REDIS_HOST}
+      REDIS_PORT: ${REDIS_PORT}
+      CORRELATION_ENGINE_URL: http://correlation-engine:8006
+    ports:
+      - "${FUSION_PORT}:8009"
+    volumes:
+      - ./services/fusion-engine:/app
+      - ./data/logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ml-engine:
+        condition: service_started
+      signature-adapter:
+        condition: service_started
+      correlation-engine:
+        condition: service_started
+    networks:
+      - main-net
+  dast-engine:
+    build: ./services/dast-engine
+    container_name: cybersentinel-dast-engine
+    restart: unless-stopped
+    ports:
+      - "${DAST_PORT}:8008"
+    networks:
+      - main-net
+      - mgmt-net
+      - sandbox-net
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - redis
+      - postgres
+    environment:
+      CORRELATION_ENGINE_URL: http://correlation-engine:8006
+  zap:
+    image: ghcr.io/zaproxy/zaproxy:stable
+    container_name: cybersentinel-zap
+    restart: unless-stopped
+    command: >
+      zap.sh -daemon -host 0.0.0.0 -port 8090
+      -config api.disablekey=true
+      -config api.addrs.addr.name=.*
+      -config api.addrs.addr.regex=true
+    ports:
+      - "8090:8090"
+    networks:
+      - mgmt-net
+      - sandbox-net
+  flow-collector:
+    build: ./services/flow-collector
+    container_name: cybersentinel-flow-collector
+    restart: unless-stopped
+    environment:
+      ML_ENGINE_URL: http://ml-engine:8000
+    ports:
+      - "8010:8010"
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    networks:
+      - sandbox-net
+      - main-net
+    depends_on:
+      - ml-engine
+volumes: {}

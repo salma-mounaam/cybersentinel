@@ -1,0 +1,99 @@
+%YAML 1.1
+---
+
+vars:
+  address-groups:
+    HOME_NET: "[172.20.0.0/16]"
+    EXTERNAL_NET: "!$HOME_NET"
+    HTTP_SERVERS: "$HOME_NET"
+    SMTP_SERVERS: "$HOME_NET"
+    SQL_SERVERS: "$HOME_NET"
+    DNS_SERVERS: "$HOME_NET"
+    TELNET_SERVERS: "$HOME_NET"
+    AIM_SERVERS: "$EXTERNAL_NET"
+    DC_SERVERS: "$HOME_NET"
+    DNP3_SERVER: "$HOME_NET"
+    DNP3_CLIENT: "$HOME_NET"
+    MODBUS_CLIENT: "$HOME_NET"
+    MODBUS_SERVER: "$HOME_NET"
+    ENIP_CLIENT: "$HOME_NET"
+    ENIP_SERVER: "$HOME_NET"
+
+  port-groups:
+    HTTP_PORTS: "80,8080,8000,3000"
+    SHELLCODE_PORTS: "!80"
+    ORACLE_PORTS: "1521"
+    SSH_PORTS: "22"
+    DNP3_PORTS: "20000"
+    MODBUS_PORTS: "502"
+    FILE_DATA_PORTS: "[$HTTP_PORTS,110,143]"
+    FTP_PORTS: "21"
+    GENEVE_PORTS: "6081"
+    VXLAN_PORTS: "4789"
+    TEREDO_PORTS: "3544"
+    MYSQL_PORTS: "3306"
+    MSSQL_PORTS: "1433"
+    SMB_PORTS: "445"
+    SMTP_PORTS: "25,465,587,646"
+    IMAP_PORTS: "143,993"
+    POP3_PORTS: "110,995"
+    SIP_PORTS: "5060,5061"
+    DCERPC_PORTS: "135"
+    NFS_PORTS: "2049"
+    TFTP_PORTS: "69"
+    SUNRPC_PORTS: "111"
+    VPN_PORTS: "1194"
+    KERBEROS_PORTS: "88,464"
+    DHCP_PORTS: "67,68"
+    DNS_PORTS: "53"
+    RDP_PORTS: "3389"
+    TELNET_PORTS: "23"
+
+default-rule-path: /var/lib/suricata/rules
+
+rule-files:
+  - local.rules
+  - et-open/rules/*.rules
+
+af-packet:
+  - interface: eth0
+    cluster-id: 99
+    cluster-type: cluster_flow
+    defrag: yes
+    use-mmap: yes
+    tpacket-v3: yes
+
+outputs:
+  - fast:
+      enabled: yes
+      filename: /var/log/suricata/fast.log
+
+  - eve-log:
+      enabled: yes
+      filetype: regular
+      filename: /var/log/suricata/eve.json
+      types:
+        - alert:
+            payload: yes
+            payload-buffer-size: 4kb
+            metadata: yes
+        - http:
+            extended: yes
+        - dns:
+            query: yes
+            answer: yes
+        - flow:
+            enabled: yes
+        - stats:
+            totals: yes
+            threads: no
+
+logging:
+  default-log-level: notice
+  outputs:
+    - console:
+        enabled: yes
+    - file:
+        enabled: yes
+        level: info
+        filename: /var/log/suricata/suricata.log
