@@ -1,7 +1,7 @@
 import json
 from typing import Optional
 
-from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request
+from fastapi import APIRouter, Header, HTTPException, Request
 
 from app.core.config import settings
 from app.services.cicd_orchestrator import execute_pipeline
@@ -43,14 +43,9 @@ def parse_push_payload(payload: dict, delivery_id: str) -> dict:
     }
 
 
-def run_pipeline_task(github_context: dict) -> None:
-    execute_pipeline(github_context)
-
-
 @router.post("/github")
 async def github_webhook(
     request: Request,
-    background_tasks: BackgroundTasks,
     x_github_event: Optional[str] = Header(default=None),
     x_hub_signature_256: Optional[str] = Header(default=None),
     x_github_delivery: Optional[str] = Header(default=None),
@@ -93,13 +88,16 @@ async def github_webhook(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    background_tasks.add_task(run_pipeline_task, github_context)
-
-    return {
-        "status": "accepted",
-        "message": "Push webhook received, pipeline scheduled",
-        "delivery_id": x_github_delivery,
-        "repository": github_context["repository_full_name"],
-        "branch": github_context["branch"],
-        "commit_sha": github_context["commit_sha"],
-    }
+    try:
+        result = execute_pipeline(github_context)
+        return {
+            "status": "completed",
+            "message": "Push webhook received and pipeline executed",
+            "delivery_id": x_github_delivery,
+            "repository": github_context["repository_full_name"],
+            "branch": github_context["branch"],
+            "commit_sha": github_context["commit_sha"],
+            "pipeline_result": result,
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Pipeline execution failed: {str(exc)}")
