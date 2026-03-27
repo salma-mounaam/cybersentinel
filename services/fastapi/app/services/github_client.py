@@ -1,4 +1,5 @@
 from typing import Optional
+
 import requests
 
 from app.core.config import settings
@@ -11,7 +12,7 @@ def _headers() -> dict:
     }
 
     if settings.GITHUB_TOKEN:
-        headers["Authorization"] = f"Bearer {settings.GITHUB_TOKEN}"
+        headers["Authorization"] = f"token {settings.GITHUB_TOKEN}"
 
     return headers
 
@@ -39,11 +40,20 @@ def set_commit_status(
     if target_url:
         payload["target_url"] = target_url
 
+    print(f"[GITHUB] Sending status to {owner}/{repo}@{sha}")
+    print(f"[GITHUB] State: {state}")
+    print(f"[GITHUB] Context: {payload['context']}")
+
     response = requests.post(
         url,
         headers=_headers(),
         json=payload,
         timeout=settings.REQUEST_TIMEOUT_SHORT,
     )
+
+    print(f"[GITHUB] Response status: {response.status_code}")
+    if response.text:
+        print(f"[GITHUB] Response body: {response.text[:500]}")
+
     response.raise_for_status()
     return response.json()
