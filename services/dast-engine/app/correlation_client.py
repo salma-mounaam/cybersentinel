@@ -1,7 +1,10 @@
 import os
 import requests
 
-CORRELATION_ENGINE_URL = os.getenv("CORRELATION_ENGINE_URL", "http://correlation-engine:8006")
+CORRELATION_ENGINE_URL = os.getenv(
+    "CORRELATION_ENGINE_URL",
+    "http://correlation-engine:8006"
+)
 
 
 def send_dast_result(payload: dict):

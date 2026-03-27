@@ -35,6 +35,6 @@ def process_packet(packet):
     flow_store.update(packet_info)
 
 
-def start_sniffing(interface="eth0", timeout=30):
+def start_sniffing(interface="eth1", timeout=30):
     sniff(iface=interface, prn=process_packet, store=False, timeout=timeout)
     return flow_store.export_features()

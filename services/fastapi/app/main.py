@@ -1,7 +1,23 @@
 from fastapi import FastAPI
 
-app = FastAPI(title="CyberSentinel FastAPI Gateway")
+from app.api.github_webhook import router as github_webhook_router
+from app.core.config import settings
+
+app = FastAPI(title=settings.APP_NAME)
+
+app.include_router(github_webhook_router)
+
 
 @app.get("/")
-def read_root():
-    return {"message": "CyberSentinel API is running"}
+def root():
+    return {
+        "service": settings.APP_NAME,
+        "status": "running",
+    }
+
+
+@app.get("/health")
+def health():
+    return {
+        "status": "healthy",
+    }

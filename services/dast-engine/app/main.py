@@ -53,7 +53,8 @@ def cleanup_sandboxes():
         return sandbox_manager.cleanup_all_sandboxes()
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erreur cleanup: {str(e)}")
-    
+
+
 @app.post("/dast/scan/{scan_id}")
 def run_dast(scan_id: str):
     try:

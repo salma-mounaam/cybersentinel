@@ -5,7 +5,6 @@ SANDBOX_NETWORK = "cybersentinel_sandbox-net"
 
 TARGET_IMAGES = {
     "dvwa": "vulnerables/web-dvwa",
-    # tu peux ajouter plus tard :
     # "webgoat": "webgoat/webgoat"
 }
 
@@ -25,9 +24,7 @@ class SandboxManager:
             internal=True,
             ipam=docker.types.IPAMConfig(
                 pool_configs=[
-                    docker.types.IPAMPool(
-                        subnet="172.22.0.0/16"
-                    )
+                    docker.types.IPAMPool(subnet="172.22.0.0/16")
                 ]
             )
         )
@@ -41,7 +38,6 @@ class SandboxManager:
         image_name = TARGET_IMAGES[target_type]
         container_name = f"sandbox-target-{scan_id}"
 
-        # suppression préventive si existe déjà
         try:
             old = self.client.containers.get(container_name)
             old.stop()
@@ -49,7 +45,7 @@ class SandboxManager:
         except NotFound:
             pass
 
-        container = self.client.containers.run(
+        self.client.containers.run(
             image=image_name,
             name=container_name,
             detach=True,
@@ -96,7 +92,10 @@ class SandboxManager:
             }
 
     def cleanup_all_sandboxes(self):
-        containers = self.client.containers.list(all=True, filters={"label": "module=sandbox"})
+        containers = self.client.containers.list(
+            all=True,
+            filters={"label": "module=sandbox"}
+        )
         deleted = []
 
         for c in containers:
