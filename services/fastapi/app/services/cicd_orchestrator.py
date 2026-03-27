@@ -1,8 +1,9 @@
+import io
 import os
 import shutil
 import tempfile
 import zipfile
-from typing import Any, Dict
+from typing import Any, Dict, Tuple
 
 import requests
 
@@ -24,11 +25,6 @@ def _github_headers() -> Dict[str, str]:
 
 
 def download_repo_archive(owner: str, repo: str, sha: str) -> str:
-    """
-    Télécharge l'archive ZIP du commit GitHub.
-    Compatible dépôts publics.
-    Pour dépôts privés, le token GitHub est ajouté si disponible.
-    """
     archive_url = f"{settings.GITHUB_API_URL}/repos/{owner}/{repo}/zipball/{sha}"
 
     tmp_dir = tempfile.mkdtemp(prefix="cybersentinel_cicd_")
@@ -54,10 +50,6 @@ def download_repo_archive(owner: str, repo: str, sha: str) -> str:
 
 
 def _find_real_source_root(extract_dir: str) -> str:
-    """
-    L’archive GitHub contient en général un dossier racine unique.
-    On retourne ce dossier si trouvé.
-    """
     entries = [os.path.join(extract_dir, entry) for entry in os.listdir(extract_dir)]
     dirs = [entry for entry in entries if os.path.isdir(entry)]
 
@@ -67,47 +59,103 @@ def _find_real_source_root(extract_dir: str) -> str:
     return extract_dir
 
 
-def run_sast_scan(source_path: str) -> Dict[str, Any]:
-    """
-    Appel réel vers le SAST engine.
-    Adapte le payload si ton endpoint /scan/all attend un autre format.
-    """
-    url = f"{settings.SAST_ENGINE_URL}/scan/all"
+def _zip_directory_to_bytes(source_path: str) -> bytes:
+    memory_file = io.BytesIO()
 
-    payload = {
-        "source_type": "local_path",
-        "source_path": source_path,
+    with zipfile.ZipFile(memory_file, "w", zipfile.ZIP_DEFLATED) as zipf:
+        for root, _, files in os.walk(source_path):
+            for file_name in files:
+                full_path = os.path.join(root, file_name)
+                arcname = os.path.relpath(full_path, source_path)
+                zipf.write(full_path, arcname)
+
+    memory_file.seek(0)
+    return memory_file.read()
+
+
+def _normalize_scan_result(data: Any) -> Dict[str, Any]:
+    if isinstance(data, dict):
+        data.setdefault("findings", [])
+        data.setdefault("status", "completed")
+        return data
+
+    return {
+        "status": "completed",
+        "findings": [],
+        "raw_response": data,
     }
+
+
+def _try_post_json(url: str, payload: Dict[str, Any], timeout: int) -> Tuple[bool, Dict[str, Any]]:
+    response = requests.post(url, json=payload, timeout=timeout)
+    if response.status_code < 400:
+        return True, _normalize_scan_result(response.json())
+
+    return False, {
+        "status_code": response.status_code,
+        "response_text": response.text[:1000],
+        "payload_type": "json",
+        "payload_preview": str(payload)[:500],
+    }
+
+
+def _try_post_file(url: str, file_bytes: bytes, timeout: int) -> Tuple[bool, Dict[str, Any]]:
+    files = {
+        "file": ("repo.zip", file_bytes, "application/zip"),
+    }
+
+    response = requests.post(url, files=files, timeout=timeout)
+    if response.status_code < 400:
+        return True, _normalize_scan_result(response.json())
+
+    return False, {
+        "status_code": response.status_code,
+        "response_text": response.text[:1000],
+        "payload_type": "multipart_file",
+    }
+
+
+def run_sast_scan(source_path: str) -> Dict[str, Any]:
+    url = f"{settings.SAST_ENGINE_URL}/scan/all"
+    zip_bytes = _zip_directory_to_bytes(source_path)
 
     print(f"[PIPELINE] Running SAST scan on: {source_path}")
 
-    try:
-        response = requests.post(
-            url,
-            json=payload,
-            timeout=settings.REQUEST_TIMEOUT_LONG,
-        )
-        response.raise_for_status()
-        data = response.json()
+    attempts = [
+        ("multipart_file", None),
+        ("json_local_path", {"source_type": "local_path", "source_path": source_path}),
+        ("json_path_only", {"source_path": source_path}),
+        ("json_repo_path", {"path": source_path}),
+    ]
 
-        if isinstance(data, dict):
-            data.setdefault("findings", [])
-            data.setdefault("status", "completed")
-            return data
+    errors = []
 
-        return {
-            "status": "completed",
-            "findings": [],
-            "raw_response": data,
-        }
+    for mode, payload in attempts:
+        try:
+            print(f"[PIPELINE] SAST attempt: {mode}")
 
-    except Exception as exc:
-        print(f"[PIPELINE] SAST error: {exc}")
-        return {
-            "status": "error",
-            "findings": [],
-            "error": str(exc),
-        }
+            if mode == "multipart_file":
+                ok, result = _try_post_file(url, zip_bytes, settings.REQUEST_TIMEOUT_LONG)
+            else:
+                ok, result = _try_post_json(url, payload, settings.REQUEST_TIMEOUT_LONG)
+
+            if ok:
+                print("[PIPELINE] SAST completed")
+                return result
+
+            errors.append({"mode": mode, **result})
+
+        except Exception as exc:
+            errors.append({"mode": mode, "error": str(exc)})
+
+    print(f"[PIPELINE] SAST error: all attempts failed")
+
+    return {
+        "status": "error",
+        "findings": [],
+        "error": "All SAST request formats failed",
+        "attempts": errors,
+    }
 
 
 def _should_run_dast(source_path: str) -> bool:
@@ -135,11 +183,6 @@ def _should_run_dast(source_path: str) -> bool:
 
 
 def run_dast_scan_if_needed(source_path: str, github_context: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    V1:
-    - skipped par défaut
-    - activable via ENABLE_DAST_IN_CICD=true
-    """
     if not _should_run_dast(source_path):
         print("[PIPELINE] DAST skipped")
         return {
@@ -198,50 +241,85 @@ def run_correlation(
 ) -> Dict[str, Any]:
     url = f"{settings.CORRELATION_ENGINE_URL}/correlate"
 
-    payload = {
-        "source": "github",
-        "repository": github_context["repository_full_name"],
-        "branch": github_context["branch"],
-        "commit_sha": github_context["commit_sha"],
-        "delivery_id": github_context["delivery_id"],
-        "author_name": github_context.get("author_name"),
-        "author_email": github_context.get("author_email"),
-        "sast_result": sast_result,
-        "dast_result": dast_result,
-    }
-
     print("[PIPELINE] Running correlation")
 
-    try:
-        response = requests.post(
-            url,
-            json=payload,
-            timeout=settings.REQUEST_TIMEOUT_LONG,
-        )
-        response.raise_for_status()
-        data = response.json()
+    attempts = [
+        {
+            "source": "github",
+            "repository": github_context["repository_full_name"],
+            "branch": github_context["branch"],
+            "commit_sha": github_context["commit_sha"],
+            "delivery_id": github_context["delivery_id"],
+            "author_name": github_context.get("author_name"),
+            "author_email": github_context.get("author_email"),
+            "sast_result": sast_result,
+            "dast_result": dast_result,
+        },
+        {
+            "source": "github",
+            "repository": github_context["repository_full_name"],
+            "branch": github_context["branch"],
+            "commit_sha": github_context["commit_sha"],
+            "delivery_id": github_context["delivery_id"],
+            "sast_findings": sast_result.get("findings", []),
+            "dast_findings": dast_result.get("findings", []),
+            "exploit_confirmed": dast_result.get("exploit_confirmed", False),
+        },
+        {
+            "repository": github_context["repository_full_name"],
+            "commit_sha": github_context["commit_sha"],
+            "sast_findings": sast_result.get("findings", []),
+            "dast_result": dast_result,
+        },
+    ]
 
-        if isinstance(data, dict):
-            data.setdefault("status", "completed")
-            data.setdefault("r_score", 0.0)
-            data.setdefault("ml_anomaly", False)
-            return data
+    errors = []
 
-        return {
-            "status": "completed",
-            "r_score": 0.0,
-            "ml_anomaly": False,
-            "raw_response": data,
-        }
+    for index, payload in enumerate(attempts, start=1):
+        try:
+            print(f"[PIPELINE] Correlation attempt: {index}")
+            response = requests.post(
+                url,
+                json=payload,
+                timeout=settings.REQUEST_TIMEOUT_LONG,
+            )
 
-    except Exception as exc:
-        print(f"[PIPELINE] Correlation error: {exc}")
-        return {
-            "status": "error",
-            "r_score": 0.0,
-            "ml_anomaly": False,
-            "error": str(exc),
-        }
+            if response.status_code < 400:
+                data = response.json()
+                if isinstance(data, dict):
+                    data.setdefault("status", "completed")
+                    data.setdefault("r_score", 0.0)
+                    data.setdefault("ml_anomaly", False)
+                    return data
+
+                return {
+                    "status": "completed",
+                    "r_score": 0.0,
+                    "ml_anomaly": False,
+                    "raw_response": data,
+                }
+
+            errors.append({
+                "attempt": index,
+                "status_code": response.status_code,
+                "response_text": response.text[:1000],
+            })
+
+        except Exception as exc:
+            errors.append({
+                "attempt": index,
+                "error": str(exc),
+            })
+
+    print("[PIPELINE] Correlation error: all attempts failed")
+
+    return {
+        "status": "error",
+        "r_score": 0.0,
+        "ml_anomaly": False,
+        "error": "All correlation request formats failed",
+        "attempts": errors,
+    }
 
 
 def map_gate_to_github_state(gate_status: str) -> str:

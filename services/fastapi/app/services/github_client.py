@@ -26,9 +26,6 @@ def set_commit_status(
     context: Optional[str] = None,
     target_url: Optional[str] = None,
 ) -> dict:
-    """
-    state: pending | success | failure | error
-    """
     url = f"{settings.GITHUB_API_URL}/repos/{owner}/{repo}/statuses/{sha}"
 
     payload = {

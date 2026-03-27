@@ -69,6 +69,8 @@ async def github_webhook(
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON payload")
 
+    print(f"[WEBHOOK] Event: {x_github_event} | Delivery: {x_github_delivery}")
+
     if x_github_event == "ping":
         return {
             "status": "ok",
@@ -101,4 +103,3 @@ async def github_webhook(
         "branch": github_context["branch"],
         "commit_sha": github_context["commit_sha"],
     }
-#test final

@@ -62,7 +62,20 @@ def evaluate_quality_gate(
     r_score = float(correlation_result.get("r_score", 0.0))
     ml_anomaly = bool(correlation_result.get("ml_anomaly", False))
 
+    sast_status = str(sast_result.get("status", "")).lower()
+    dast_status = str(dast_result.get("status", "")).lower()
+    correlation_status = str(correlation_result.get("status", "")).lower()
+
     fail_reasons = []
+
+    if sast_status == "error":
+        fail_reasons.append("SAST engine returned an error")
+
+    if correlation_status == "error":
+        fail_reasons.append("Correlation engine returned an error")
+
+    if dast_status == "error":
+        fail_reasons.append("DAST engine returned an error")
 
     if critical_count > 0:
         fail_reasons.append(f"{critical_count} critical finding(s) detected")
@@ -87,6 +100,9 @@ def evaluate_quality_gate(
                 "exploit_confirmed": exploit_confirmed,
                 "r_score": r_score,
                 "ml_anomaly": ml_anomaly,
+                "sast_status": sast_status,
+                "dast_status": dast_status,
+                "correlation_status": correlation_status,
             },
         }
 
@@ -112,6 +128,9 @@ def evaluate_quality_gate(
                 "exploit_confirmed": exploit_confirmed,
                 "r_score": r_score,
                 "ml_anomaly": ml_anomaly,
+                "sast_status": sast_status,
+                "dast_status": dast_status,
+                "correlation_status": correlation_status,
             },
         }
 
@@ -125,5 +144,8 @@ def evaluate_quality_gate(
             "exploit_confirmed": exploit_confirmed,
             "r_score": r_score,
             "ml_anomaly": ml_anomaly,
+            "sast_status": sast_status,
+            "dast_status": dast_status,
+            "correlation_status": correlation_status,
         },
     }
